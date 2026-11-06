@@ -30,16 +30,20 @@ def test_edges_are_a_wireframe():
     assert int((full > 0).sum()) == 4 * (4 + 5 + 6) - 2 * 8   # 12 edges, corners counted once
 
 
-def test_auto_draws_faces_in_slices_and_edges_for_volumes():
-    bounds = np.array([[[1, 4], [2, 6], [3, 8]]])
-    auto = BoxShells((8, 9, 10), bounds)
-    faces = np.asarray(BoxShells((8, 9, 10), bounds, mode="faces"))
-    edges = np.asarray(BoxShells((8, 9, 10), bounds, mode="edges"))
-    np.testing.assert_array_equal(np.asarray(auto), edges)            # napari's 3-D view
-    for d in range(3):                                                # napari's 2-D slices in every plane
+def test_auto_draws_rectangle_outlines_in_slices_and_edges_for_volumes():
+    lo, hi = np.array([1, 2, 3]), np.array([4, 6, 8])
+    auto = BoxShells((8, 9, 10), np.stack([lo, hi], -1)[None])
+    np.testing.assert_array_equal(np.asarray(auto), np.asarray(BoxShells((8, 9, 10), np.stack([lo, hi], -1)[None],
+                                                                         mode="edges")))   # napari's 3-D view
+    for d in range(3):                                  # napari's 2-D slices in every plane, incl. the face planes
+        others = [e for e in range(3) if e != d]
         for k in range(auto.shape[d]):
-            key = (slice(None),) * d + (k,)
-            np.testing.assert_array_equal(auto[key], faces[key])
+            expected = np.zeros([auto.shape[e] for e in others], np.uint16)
+            if lo[d] <= k <= hi[d]:
+                (a0, a1), (b0, b1) = [(lo[e], hi[e]) for e in others]
+                expected[a0:a1 + 1, b0] = expected[a0:a1 + 1, b1] = 1
+                expected[a0, b0:b1 + 1] = expected[a1, b0:b1 + 1] = 1
+            np.testing.assert_array_equal(auto[(slice(None),) * d + (k,)], expected)
 
 
 @pytest.mark.parametrize("key", [
@@ -48,6 +52,8 @@ def test_auto_draws_faces_in_slices_and_edges_for_volumes():
 ])
 @pytest.mark.parametrize("mode", ["faces", "edges"])
 def test_shell_slices_match_the_full_array(key, mode):
+    if mode == "faces" and any(isinstance(k, int) for k in key):
+        pytest.skip("faces: a single-position slice shows the cut outline, not the face (tested above)")
     shells = BoxShells((8, 9, 10), np.array([[[1, 4], [2, 6], [3, 8]], [[3, 7], [0, 8], [5, 9]]]), mode=mode)
     full = np.asarray(shells)
     np.testing.assert_array_equal(shells[key], full[key])
@@ -114,16 +120,17 @@ def test_texts_follow_the_slice_and_show_in_3d():
     viewer.dims.order = (0, 1, 2)                       # axial: dim 0 hidden
     viewer.dims.set_point(0, 3)
     assert list(texts.shown) == [True, False]
-    np.testing.assert_allclose(texts.data[0], [3, 3, 4])   # slice position, top-left of the cut
+    pad = 0.015 * 10                                        # TEXT_PAD x largest world extent (10 voxels of 1)
+    np.testing.assert_allclose(texts.data[0], [3, 3 - pad, 4])   # slice position, above the top-left of the cut
     viewer.dims.set_point(0, 7)
     assert list(texts.shown) == [False, True]
     viewer.dims.order = (1, 0, 2)                       # coronal: dim 1 hidden
     viewer.dims.set_point(1, 5)
     assert list(texts.shown) == [True, False]
-    np.testing.assert_allclose(texts.data[0], [2, 5, 4])
+    np.testing.assert_allclose(texts.data[0], [2 - pad, 5, 4])
     viewer.dims.ndisplay = 3
     assert all(texts.shown)
-    np.testing.assert_allclose(texts.data, [[2, 3, 4], [6, 1, 1]])
+    np.testing.assert_allclose(texts.data, np.array([[2, 3, 4], [6, 1, 1]]) - pad)
 
 
 def test_no_text_layer_without_labels_or_scores():
@@ -140,4 +147,5 @@ def test_texts_sit_at_the_top_left_on_screen_when_the_affine_flips():
     assert list(texts.shown) == [True]
     world = texts.data_to_world(texts.data[0])
     lo_world = np.array([texts.data_to_world(c) for c in ([2, 3, 4], [4, 6, 8])]).min(0)
-    np.testing.assert_allclose(world[1:], lo_world[1:])    # smallest world coordinates on screen = top left
+    pad = 0.015 * 20                                       # largest world extent: 10 voxels x 2
+    np.testing.assert_allclose(world[1:], lo_world[1:] - [pad, 0])   # above the top-left corner on screen

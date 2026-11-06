@@ -27,7 +27,8 @@ class BoxShells:
     computed, so any grid size costs no memory. Where boxes overlap, the later box wins.
 
     ``mode``:
-      - ``faces``: the box surface; any 2-D slice through a box shows the rectangle where it cuts the box;
+      - ``faces``: the box surface; any 2-D slice through a box shows the outline of the rectangle where it cuts
+        the box (also on the face planes, which would otherwise be filled);
       - ``edges``: only the box edges (a wireframe), so the content inside stays visible in 3-D;
       - ``auto`` (default): ``faces`` for requests that index a single position along some dim (napari's 2-D
         slices) and ``edges`` for requests of the whole volume (napari's 3-D view).
@@ -75,15 +76,20 @@ class BoxShells:
                 ranges.append((k, k + 1))
                 squeeze.append(d)
         mode = self.mode if self.mode != "auto" else ("faces" if squeeze else "edges")
-        # faces: one dim on a bound plane; edges: two dims on bound planes (the other dims span the box)
+        # faces: one dim on a bound plane; edges: two dims on bound planes (the other dims span the box).
+        # Only dims that stay in the result take part: a slice shows the outline of its cut through the box,
+        # also when it lies on a face plane (instead of the filled face).
         fixed = 1 if mode == "faces" or self.ndim < 2 else 2
+        free = [d for d in range(self.ndim) if d not in squeeze] if mode == "faces" else list(range(self.ndim))
+        if len(free) < fixed:
+            free = list(range(self.ndim))
         out = np.zeros([b - a for a, b in ranges], dtype=self.dtype)
         for number, box in enumerate(self.bounds, start=1):
             lo, hi = box[:, 0], box[:, 1]
             inter = [(max(a, lo[d]), min(b, hi[d] + 1)) for d, (a, b) in enumerate(ranges)]
             if any(a >= b for a, b in inter):
                 continue
-            for dims in itertools.combinations(range(self.ndim), fixed):
+            for dims in itertools.combinations(free, fixed):
                 for planes in itertools.product(*[sorted({int(lo[d]), int(hi[d])}) for d in dims]):
                     if not all(ranges[d][0] <= p < ranges[d][1] for d, p in zip(dims, planes)):
                         continue
@@ -226,19 +232,22 @@ def bbox_layers(
     kwargs = {**common, "features": features, "colormap": DirectLabelColormap(color_dict=color_dict), "opacity": 1.0}
     layers = [(BoxShells(grid_shape, bounds, mode), kwargs, "labels")]
     if text and any(texts):
-        layers.append(_text_layer(bounds, texts, color, common, name))
+        layers.append(_text_layer(bounds, texts, color, common, name, grid_shape))
         _connect_current_viewer()
     return layers
 
 
 TEXT_ROLE = "bbox_text"
+#: distance between a box and its text, as a fraction of the grid's largest world extent
+TEXT_PAD = 0.015
 
 
-def _text_layer(bounds: np.ndarray, texts: List[str], color: np.ndarray, common: Dict[str, Any], name: str) -> LayerData:
+def _text_layer(bounds: np.ndarray, texts: List[str], color: np.ndarray, common: Dict[str, Any], name: str,
+                shape: Sequence[int]) -> LayerData:
     """A Points layer that only carries text: one point per box at its first corner (see ``update_texts``)."""
     lo, hi = bounds[..., 0].astype(float), bounds[..., 1].astype(float)
     metadata = dict(common.get("metadata") or {})
-    metadata[TEXT_ROLE] = {"lo": lo.tolist(), "hi": hi.tolist()}
+    metadata[TEXT_ROLE] = {"lo": lo.tolist(), "hi": hi.tolist(), "shape": [int(v) for v in shape]}
     kwargs = {**common, "name": f"{name} text", "metadata": metadata,
               "features": {"box": texts, "text_color": ["#" + "".join(f"{round(v * 255):02x}" for v in c) for c in color]},
               "text": {"string": "{box}", "anchor": "upper_left", "size": 10, "color": {"feature": "text_color"}},
@@ -265,13 +274,19 @@ def update_texts(viewer) -> None:
         hidden = [d for d in range(layer.ndim) if d not in displayed]
         # the corner that is top-left on screen: per dim the end with the smaller world coordinate
         # (the affine may flip axes, so that is not always the smaller index)
-        flipped = np.asarray(layer.data_to_world(np.ones(layer.ndim))) < np.asarray(layer.data_to_world(np.zeros(layer.ndim)))
-        corner = np.where(flipped, hi, lo)
+        step = np.asarray(layer.data_to_world(np.ones(layer.ndim))) - np.asarray(layer.data_to_world(np.zeros(layer.ndim)))
+        step[step == 0] = 1.0
+        corner = np.where(step < 0, hi, lo)
+        # keep the text clear of the box: move it toward smaller world coordinates (up/left on screen, outward in 3-D)
+        shape = np.asarray(info.get("shape") or (hi.max(axis=0) + 1), dtype=float)
+        pad = TEXT_PAD * float(np.max(np.abs(step) * shape))
         if dims.ndisplay == 3 or not hidden:
-            data, shown = corner.copy(), np.ones(len(lo), bool)
+            data, shown = corner - pad / step, np.ones(len(lo), bool)
         else:
             position = np.asarray(layer.world_to_data(dims.point[offset:]))
-            data = corner.copy()
+            data = corner.astype(float)
+            up = displayed[-2] if len(displayed) >= 2 else displayed[0]
+            data[:, up] -= pad / step[up]
             data[:, hidden] = np.round(position[hidden])
             shown = np.all((lo[:, hidden] - 0.5 <= position[hidden]) & (position[hidden] <= hi[:, hidden] + 0.5), axis=1)
         if not np.array_equal(layer.data, data):
