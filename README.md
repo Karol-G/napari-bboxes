@@ -43,7 +43,9 @@ napari.run()
 ```
 
 - **3-D boxes** become a Labels layer: each box has its own number, coloured by class, and hovering shows
-  `name (label) score`.
+  `name (label) score`. With labels or scores, a second layer shows that text on screen: in 2-D above the top-left
+  corner of every box the current slice cuts (it follows the slice, the plane and 2-D/3-D switches), in 3-D at a
+  box corner. `text=False` turns it off.
 - **2-D boxes** become a Shapes layer of rectangles, with the same text next to each box.
 - `bbox_layers(...)` returns the same as layer data tuples `(data, kwargs, layer_type)`, for napari readers.
 - `BoxShells(shape, bounds, mode)` is the lazy outline array on its own. `mode="auto"` (default) draws the box

@@ -103,4 +103,41 @@ def test_default_grid_and_validation():
 def test_add_bboxes_returns_layers():
     viewer = ViewerModel()
     layers = add_bboxes(viewer, [[0, 0, 0]], [[1, 1, 1]], grid_shape=(3, 3, 3))
-    assert len(layers) == 1 and layers[0] in viewer.layers
+    assert len(layers) == 1 and layers[0] in viewer.layers   # no labels or scores: no text layer
+
+
+def test_texts_follow_the_slice_and_show_in_3d():
+    viewer = ViewerModel()
+    shells, texts = add_bboxes(viewer, [[2, 3, 4], [6, 1, 1]], [[4, 6, 8], [8, 2, 2]], labels=[1, 2],
+                               scores=[0.9, 0.25], names={1: "tumor", 2: "node"}, grid_shape=(10, 10, 10))
+    assert texts._type_string == "points" and list(texts.features["box"]) == ["tumor (1) 0.900", "node (2) 0.250"]
+    viewer.dims.order = (0, 1, 2)                       # axial: dim 0 hidden
+    viewer.dims.set_point(0, 3)
+    assert list(texts.shown) == [True, False]
+    np.testing.assert_allclose(texts.data[0], [3, 3, 4])   # slice position, top-left of the cut
+    viewer.dims.set_point(0, 7)
+    assert list(texts.shown) == [False, True]
+    viewer.dims.order = (1, 0, 2)                       # coronal: dim 1 hidden
+    viewer.dims.set_point(1, 5)
+    assert list(texts.shown) == [True, False]
+    np.testing.assert_allclose(texts.data[0], [2, 5, 4])
+    viewer.dims.ndisplay = 3
+    assert all(texts.shown)
+    np.testing.assert_allclose(texts.data, [[2, 3, 4], [6, 1, 1]])
+
+
+def test_no_text_layer_without_labels_or_scores():
+    assert len(bbox_layers([[0, 0, 0]], [[1, 1, 1]])) == 1
+    assert len(bbox_layers([[0, 0, 0]], [[1, 1, 1]], labels=[1], text=False)) == 1
+
+
+def test_texts_sit_at_the_top_left_on_screen_when_the_affine_flips():
+    viewer = ViewerModel()
+    affine = np.diag([-1.0, 1.0, -2.0, 1.0])
+    _, texts = add_bboxes(viewer, [[2, 3, 4]], [[4, 6, 8]], labels=[1], grid_shape=(10, 10, 10), affine=affine)
+    viewer.dims.order = (0, 1, 2)
+    viewer.dims.set_point(0, -3)                       # world dim 0 = -index
+    assert list(texts.shown) == [True]
+    world = texts.data_to_world(texts.data[0])
+    lo_world = np.array([texts.data_to_world(c) for c in ([2, 3, 4], [4, 6, 8])]).min(0)
+    np.testing.assert_allclose(world[1:], lo_world[1:])    # smallest world coordinates on screen = top left

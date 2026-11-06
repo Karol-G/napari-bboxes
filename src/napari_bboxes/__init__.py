@@ -5,6 +5,7 @@ try:
 except ImportError:  # pragma: no cover
     __version__ = "unknown"
 
-from ._layers import PALETTE, BoxShells, add_bboxes, bbox_layers, box_colors, box_texts
+from ._layers import PALETTE, BoxShells, add_bboxes, bbox_layers, box_colors, box_texts, connect_texts, update_texts
 
-__all__ = ["PALETTE", "BoxShells", "add_bboxes", "bbox_layers", "box_colors", "box_texts", "__version__"]
+__all__ = ["PALETTE", "BoxShells", "add_bboxes", "bbox_layers", "box_colors", "box_texts", "connect_texts",
+           "update_texts", "__version__"]

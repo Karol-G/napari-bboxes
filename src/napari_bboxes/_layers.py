@@ -169,14 +169,15 @@ def bbox_layers(
         affine: (ndim+1, ndim+1) grid index -> world transform, e.g. the affine of the image the boxes belong
             to; the boxes then align with that image however it is displayed.
         name, axis_labels, units, metadata: passed to the layer.
-        text: show label and score next to 2-D boxes.
+        text: show label, name and score as text next to every box (2-D boxes: on the rectangles; 3-D boxes: a
+            Points layer of texts that follows the current slice, see ``connect_texts``).
         mode: how 3-D boxes are drawn (``BoxShells``): ``auto`` (outline in 2-D slices, edges only in the 3-D
             view, so the content stays visible), ``faces`` or ``edges``.
 
     Returns:
         2-D boxes: one Shapes layer of rectangles. 3-D boxes: one Labels layer of box outlines (a slice in any
-        plane shows the rectangle where it cuts the box; the 3-D view shows the box edges); hovering shows label,
-        name and score.
+        plane shows the rectangle where it cuts the box; the 3-D view shows the box edges; hovering shows label,
+        name and score) and, with ``text``, a Points layer that shows that text next to each box.
     """
     mins = np.atleast_2d(np.asarray(mins, dtype=np.float64))
     maxs = np.atleast_2d(np.asarray(maxs, dtype=np.float64))
@@ -223,12 +224,98 @@ def bbox_layers(
     color_dict = {None: (0.0, 0.0, 0.0, 0.0), 0: (0.0, 0.0, 0.0, 0.0)}
     color_dict.update({i: tuple(c) for i, c in enumerate(color, start=1)})
     kwargs = {**common, "features": features, "colormap": DirectLabelColormap(color_dict=color_dict), "opacity": 1.0}
-    return [(BoxShells(grid_shape, bounds, mode), kwargs, "labels")]
+    layers = [(BoxShells(grid_shape, bounds, mode), kwargs, "labels")]
+    if text and any(texts):
+        layers.append(_text_layer(bounds, texts, color, common, name))
+        _connect_current_viewer()
+    return layers
+
+
+TEXT_ROLE = "bbox_text"
+
+
+def _text_layer(bounds: np.ndarray, texts: List[str], color: np.ndarray, common: Dict[str, Any], name: str) -> LayerData:
+    """A Points layer that only carries text: one point per box at its first corner (see ``update_texts``)."""
+    lo, hi = bounds[..., 0].astype(float), bounds[..., 1].astype(float)
+    metadata = dict(common.get("metadata") or {})
+    metadata[TEXT_ROLE] = {"lo": lo.tolist(), "hi": hi.tolist()}
+    kwargs = {**common, "name": f"{name} text", "metadata": metadata,
+              "features": {"box": texts, "text_color": ["#" + "".join(f"{round(v * 255):02x}" for v in c) for c in color]},
+              "text": {"string": "{box}", "anchor": "upper_left", "size": 10, "color": {"feature": "text_color"}},
+              "size": 1, "face_color": "transparent", "border_color": "transparent", "border_width": 0,
+              "blending": "translucent_no_depth"}
+    return lo.copy(), kwargs, "points"
+
+
+def update_texts(viewer) -> None:
+    """Place the box texts for the viewer's current view.
+
+    3-D view: every text at its box's corner with the smallest world coordinates. 2-D view: the texts of the boxes
+    the current slice cuts, at the top-left corner of that cut on screen; the others are hidden. Assumes an
+    affine without rotation (scale, flips, translation), as for ``bbox_layers``.
+    """
+    dims = viewer.dims
+    for layer in list(viewer.layers):
+        info = (getattr(layer, "metadata", None) or {}).get(TEXT_ROLE)
+        if info is None or layer._type_string != "points":
+            continue
+        lo, hi = np.asarray(info["lo"]), np.asarray(info["hi"])
+        offset = dims.ndim - layer.ndim
+        displayed = [d - offset for d in dims.displayed if d >= offset]
+        hidden = [d for d in range(layer.ndim) if d not in displayed]
+        # the corner that is top-left on screen: per dim the end with the smaller world coordinate
+        # (the affine may flip axes, so that is not always the smaller index)
+        flipped = np.asarray(layer.data_to_world(np.ones(layer.ndim))) < np.asarray(layer.data_to_world(np.zeros(layer.ndim)))
+        corner = np.where(flipped, hi, lo)
+        if dims.ndisplay == 3 or not hidden:
+            data, shown = corner.copy(), np.ones(len(lo), bool)
+        else:
+            position = np.asarray(layer.world_to_data(dims.point[offset:]))
+            data = corner.copy()
+            data[:, hidden] = np.round(position[hidden])
+            shown = np.all((lo[:, hidden] - 0.5 <= position[hidden]) & (position[hidden] <= hi[:, hidden] + 0.5), axis=1)
+        if not np.array_equal(layer.data, data):
+            layer.data = data
+        layer.shown = shown
+
+
+_connected = []   # viewers whose dims update the texts (weak references)
+
+
+def connect_texts(viewer) -> None:
+    """Keep the box texts of ``viewer`` in place when the slice, plane or 2-D/3-D view changes (idempotent)."""
+    import weakref
+
+    _connected[:] = [ref for ref in _connected if ref() is not None]
+    if any(ref() is viewer for ref in _connected):
+        return
+    _connected.append(weakref.ref(viewer))
+
+    def refresh(event=None):
+        update_texts(viewer)
+
+    viewer.dims.events.current_step.connect(refresh)
+    viewer.dims.events.order.connect(refresh)
+    viewer.dims.events.ndisplay.connect(refresh)
+    viewer.layers.events.inserted.connect(refresh)
+
+
+def _connect_current_viewer() -> None:
+    try:
+        import napari
+
+        viewer = napari.current_viewer()
+    except Exception:  # noqa: BLE001 - no Qt or no viewer: texts stay at the box corners
+        return
+    if viewer is not None:
+        connect_texts(viewer)
 
 
 def add_bboxes(viewer, mins, maxs, **kwargs) -> list:
     """Add boxes to ``viewer`` (see ``bbox_layers`` for the arguments); returns the new layers."""
+    connect_texts(viewer)
     layers = []
     for data, layer_kwargs, layer_type in bbox_layers(mins, maxs, **kwargs):
         layers.append(getattr(viewer, f"add_{layer_type}")(data, **layer_kwargs))
+    update_texts(viewer)
     return layers
