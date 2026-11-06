@@ -12,8 +12,9 @@ can see **in every 2-D plane and in 3-D**, aligned with the image they belong to
 
 napari's own layers cannot do this for 3-D boxes: a Shapes rectangle lives in one plane, and a Surface mesh shows
 nothing in 2-D slices (only faces lying entirely in the slice are drawn). napari-bboxes draws a 3-D box as a
-one-voxel **outline** on the image grid, computed per slice on demand: an axial, coronal or sagittal slice shows the
-rectangle where it cuts the box, the 3-D view shows the box, and the array costs no memory.
+one-voxel **outline** on the image grid, computed on demand: an axial, coronal or sagittal slice shows the rectangle
+where it cuts the box, and the 3-D view shows only the box **edges**, so the content inside stays visible. The array
+costs no memory.
 
 ```bash
 pip install napari-bboxes
@@ -45,7 +46,8 @@ napari.run()
   `name (label) score`.
 - **2-D boxes** become a Shapes layer of rectangles, with the same text next to each box.
 - `bbox_layers(...)` returns the same as layer data tuples `(data, kwargs, layer_type)`, for napari readers.
-- `BoxShells(shape, bounds)` is the lazy outline array on its own.
+- `BoxShells(shape, bounds, mode)` is the lazy outline array on its own. `mode="auto"` (default) draws the box
+  surface for 2-D slices and the edges for the 3-D view; `"faces"` or `"edges"` force one of them.
 
 Coordinates are array indices of a grid (voxel centres, inclusive bounds). Boxes in world or physical coordinates
 are converted by the caller: map the corners through the inverse of the image affine and take the bounding box.

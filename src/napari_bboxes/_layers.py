@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import numbers
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -16,15 +17,26 @@ PALETTE = [
 LayerData = Tuple[Any, Dict[str, Any], str]
 
 
-class BoxShells:
-    """A lazy integer array of box outlines: voxel = box number (1-based) on the shell of a box, else 0.
+MODES = ("auto", "faces", "edges")
 
-    Each box is given by inclusive index bounds per dim (``bounds``: (n, ndim, 2)). Only the requested slice is
-    computed, so any grid size costs no memory. Any slice through a box shows its outline: a rectangle in a 2-D
-    plane, a hollow box in 3-D. Where boxes overlap, the later box wins.
+
+class BoxShells:
+    """A lazy integer array of box outlines: voxel = box number (1-based) on a box outline, else 0.
+
+    Each box is given by inclusive index bounds per dim (``bounds``: (n, ndim, 2)). Only the requested part is
+    computed, so any grid size costs no memory. Where boxes overlap, the later box wins.
+
+    ``mode``:
+      - ``faces``: the box surface; any 2-D slice through a box shows the rectangle where it cuts the box;
+      - ``edges``: only the box edges (a wireframe), so the content inside stays visible in 3-D;
+      - ``auto`` (default): ``faces`` for requests that index a single position along some dim (napari's 2-D
+        slices) and ``edges`` for requests of the whole volume (napari's 3-D view).
     """
 
-    def __init__(self, shape: Sequence[int], bounds: np.ndarray):
+    def __init__(self, shape: Sequence[int], bounds: np.ndarray, mode: str = "auto"):
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+        self.mode = mode
         self.shape = tuple(int(s) for s in shape)
         self.ndim = len(self.shape)
         self.bounds = np.asarray(bounds, dtype=np.int64).reshape(-1, self.ndim, 2)
@@ -62,19 +74,22 @@ class BoxShells:
                     raise IndexError(f"index {k} is out of bounds for axis {d} with size {self.shape[d]}")
                 ranges.append((k, k + 1))
                 squeeze.append(d)
+        mode = self.mode if self.mode != "auto" else ("faces" if squeeze else "edges")
+        # faces: one dim on a bound plane; edges: two dims on bound planes (the other dims span the box)
+        fixed = 1 if mode == "faces" or self.ndim < 2 else 2
         out = np.zeros([b - a for a, b in ranges], dtype=self.dtype)
         for number, box in enumerate(self.bounds, start=1):
             lo, hi = box[:, 0], box[:, 1]
             inter = [(max(a, lo[d]), min(b, hi[d] + 1)) for d, (a, b) in enumerate(ranges)]
             if any(a >= b for a, b in inter):
                 continue
-            for d in range(self.ndim):
-                a, b = ranges[d]
-                for plane in {int(lo[d]), int(hi[d])}:
-                    if not a <= plane < b:
+            for dims in itertools.combinations(range(self.ndim), fixed):
+                for planes in itertools.product(*[sorted({int(lo[d]), int(hi[d])}) for d in dims]):
+                    if not all(ranges[d][0] <= p < ranges[d][1] for d, p in zip(dims, planes)):
                         continue
                     region = [slice(s - ranges[e][0], t - ranges[e][0]) for e, (s, t) in enumerate(inter)]
-                    region[d] = slice(plane - a, plane - a + 1)
+                    for d, p in zip(dims, planes):
+                        region[d] = slice(p - ranges[d][0], p - ranges[d][0] + 1)
                     out[tuple(region)] = number
         return out.squeeze(axis=tuple(squeeze)) if squeeze else out
 
@@ -140,6 +155,7 @@ def bbox_layers(
     units: Optional[Sequence[Union[str, None]]] = None,
     metadata: Optional[dict] = None,
     text: bool = True,
+    mode: str = "auto",
 ) -> List[LayerData]:
     """napari layer data for axis-aligned boxes, ready for ``viewer._add_layer_from_data`` or a reader.
 
@@ -154,11 +170,13 @@ def bbox_layers(
             to; the boxes then align with that image however it is displayed.
         name, axis_labels, units, metadata: passed to the layer.
         text: show label and score next to 2-D boxes.
+        mode: how 3-D boxes are drawn (``BoxShells``): ``auto`` (outline in 2-D slices, edges only in the 3-D
+            view, so the content stays visible), ``faces`` or ``edges``.
 
     Returns:
         2-D boxes: one Shapes layer of rectangles. 3-D boxes: one Labels layer of box outlines (a slice in any
-        plane shows the rectangle where it cuts the box; the 3-D view shows the box); hovering shows label, name
-        and score.
+        plane shows the rectangle where it cuts the box; the 3-D view shows the box edges); hovering shows label,
+        name and score.
     """
     mins = np.atleast_2d(np.asarray(mins, dtype=np.float64))
     maxs = np.atleast_2d(np.asarray(maxs, dtype=np.float64))
@@ -205,7 +223,7 @@ def bbox_layers(
     color_dict = {None: (0.0, 0.0, 0.0, 0.0), 0: (0.0, 0.0, 0.0, 0.0)}
     color_dict.update({i: tuple(c) for i, c in enumerate(color, start=1)})
     kwargs = {**common, "features": features, "colormap": DirectLabelColormap(color_dict=color_dict), "opacity": 1.0}
-    return [(BoxShells(grid_shape, bounds), kwargs, "labels")]
+    return [(BoxShells(grid_shape, bounds, mode), kwargs, "labels")]
 
 
 def add_bboxes(viewer, mins, maxs, **kwargs) -> list:

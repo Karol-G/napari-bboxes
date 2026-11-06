@@ -12,8 +12,8 @@ def _add(layer_data):
     return viewer
 
 
-def test_shells_are_hollow_box_outlines():
-    shells = BoxShells((8, 9, 10), np.array([[[1, 4], [2, 6], [3, 8]]]))
+def test_faces_are_hollow_box_outlines():
+    shells = BoxShells((8, 9, 10), np.array([[[1, 4], [2, 6], [3, 8]]]), mode="faces")
     full = np.asarray(shells)
     on = np.argwhere(full)
     assert on.min(0).tolist() == [1, 2, 3] and on.max(0).tolist() == [4, 6, 8]
@@ -22,18 +22,39 @@ def test_shells_are_hollow_box_outlines():
     assert full[2, 2, 3:9].all() and not full[2, 3, 4]   # middle slice: only the rectangle outline
 
 
+def test_edges_are_a_wireframe():
+    shells = BoxShells((8, 9, 10), np.array([[[1, 4], [2, 6], [3, 8]]]), mode="edges")
+    full = np.asarray(shells)
+    assert full[1, 2, 3:9].all() and full[1:5, 6, 8].all() and full[4, 2:7, 3].all()   # edges
+    assert not full[1, 4, 5] and not full[2, 2, 5]       # face centres empty
+    assert int((full > 0).sum()) == 4 * (4 + 5 + 6) - 2 * 8   # 12 edges, corners counted once
+
+
+def test_auto_draws_faces_in_slices_and_edges_for_volumes():
+    bounds = np.array([[[1, 4], [2, 6], [3, 8]]])
+    auto = BoxShells((8, 9, 10), bounds)
+    faces = np.asarray(BoxShells((8, 9, 10), bounds, mode="faces"))
+    edges = np.asarray(BoxShells((8, 9, 10), bounds, mode="edges"))
+    np.testing.assert_array_equal(np.asarray(auto), edges)            # napari's 3-D view
+    for d in range(3):                                                # napari's 2-D slices in every plane
+        for k in range(auto.shape[d]):
+            key = (slice(None),) * d + (k,)
+            np.testing.assert_array_equal(auto[key], faces[key])
+
+
 @pytest.mark.parametrize("key", [
     (slice(None),), (2,), (Ellipsis, 5), (slice(1, 5), 3), (-1,), (slice(None, None, 2), slice(None), 4),
-    (slice(None, None, -1), 2), (3, slice(1, 7, 3), slice(None)),
+    (slice(None, None, -1), 2), (3, slice(1, 7, 3), slice(None)), (slice(2, 6), slice(1, 8), slice(4, 9)),
 ])
-def test_shell_slices_match_the_full_array(key):
-    shells = BoxShells((8, 9, 10), np.array([[[1, 4], [2, 6], [3, 8]], [[3, 7], [0, 8], [5, 9]]]))
+@pytest.mark.parametrize("mode", ["faces", "edges"])
+def test_shell_slices_match_the_full_array(key, mode):
+    shells = BoxShells((8, 9, 10), np.array([[[1, 4], [2, 6], [3, 8]], [[3, 7], [0, 8], [5, 9]]]), mode=mode)
     full = np.asarray(shells)
     np.testing.assert_array_equal(shells[key], full[key])
 
 
 def test_overlapping_boxes_later_wins_and_numbers_are_one_based():
-    shells = BoxShells((5, 5, 5), np.array([[[0, 4]] * 3, [[1, 3]] * 3]))
+    shells = BoxShells((5, 5, 5), np.array([[[0, 4]] * 3, [[1, 3]] * 3]), mode="faces")
     full = np.asarray(shells)
     assert set(np.unique(full)) == {0, 1, 2}
     assert full[1, 1, 1] == 2
@@ -46,7 +67,7 @@ def test_3d_boxes_become_a_labels_layer_aligned_through_the_affine():
     layer = viewer.layers[0]
     assert layer._type_string == "labels" and layer.name == "det"
     assert tuple(layer.axis_labels) == ("I", "P", "L")
-    on = np.argwhere(np.asarray(layer.data))
+    on = np.argwhere(np.asarray(layer.data))           # the edges span the whole box too
     world = np.array([layer.data_to_world(i) for i in (on.min(0), on.max(0))])
     expected = np.array([affine[:3, :3] @ c + affine[:3, 3] for c in ([1, 2, 3], [4, 6, 8])])
     np.testing.assert_allclose(np.sort(world, 0), np.sort(expected, 0))
