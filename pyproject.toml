@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools_scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "napari-bboxes"
+dynamic = ["version"]
+description = "Axis-aligned 2-D and 3-D bounding boxes as napari layers, visible in every plane and in 3-D."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Karol Gotkowski", email = "karol.gotkowski@dkfz.de" }]
+requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: napari",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+keywords = ["napari", "bounding box", "object detection", "medical imaging"]
+dependencies = ["numpy", "napari>=0.6"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/Karol-G/napari-bboxes"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+version_file = "src/napari_bboxes/_version.py"
+fallback_version = "0.0.0+nogit"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
